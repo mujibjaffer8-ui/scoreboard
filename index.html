@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scoreboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0F1A; --panel:#141B2E; --panel2:#1B2440; --line:#26314F;
+    --text:#E9EDF7; --muted:#8592B0; --amber:#FFC145; --live:#FF4B4B;
+    --win:#5CE6A8;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;}
+  html{scroll-padding-top:env(safe-area-inset-top,0px);}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{max-width:720px; margin:0 auto; min-height:100%; display:flex; flex-direction:column;}
+
+  header{
+    position:sticky; top:env(safe-area-inset-top,0px); z-index:5;
+    background:var(--bg); padding:18px 16px 0; border-bottom:1px solid var(--line);
+  }
+  .title-row{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;}
+  h1{
+    font-family:'Space Mono',monospace; font-weight:700; font-size:22px;
+    margin:0; letter-spacing:-0.5px;
+  }
+  .clock{font-family:'Space Mono',monospace; font-size:12px; color:var(--muted);}
+
+  nav{display:flex; gap:4px; overflow-x:auto; padding-bottom:0; scrollbar-width:none;}
+  nav::-webkit-scrollbar{display:none;}
+  nav button{
+    background:none; border:none; color:var(--muted); font-family:'Inter',sans-serif;
+    font-size:14px; font-weight:600; padding:10px 14px; cursor:pointer;
+    border-bottom:2px solid transparent; white-space:nowrap;
+  }
+  nav button.active{color:var(--text); border-bottom-color:var(--amber);}
+
+  main{flex:1; padding:16px; padding-bottom:40px;}
+
+  .toolbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+  .day-label{font-size:13px; color:var(--muted);}
+  .refresh{
+    background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    font-size:12px; font-weight:600; padding:7px 12px; border-radius:8px; cursor:pointer;
+  }
+  .refresh:active{transform:scale(0.97);}
+
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:14px 16px; margin-bottom:10px;
+  }
+  .card-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;}
+  .status{
+    font-family:'Space Mono',monospace; font-size:11px; font-weight:700;
+    color:var(--muted); letter-spacing:0.5px;
+  }
+  .status.live{color:var(--live);}
+  .status.live::before{content:"● "; }
+  .league{font-size:11px; color:var(--muted);}
+
+  .team-row{display:flex; align-items:center; justify-content:space-between; padding:4px 0;}
+  .team-name{display:flex; align-items:center; gap:8px; font-size:15px; font-weight:500;}
+  .team-name.winner{font-weight:700; color:var(--win);}
+  .logo{width:22px; height:22px; border-radius:4px; object-fit:contain; background:#fff1; flex:none;}
+  .score{font-family:'Space Mono',monospace; font-size:18px; font-weight:700; min-width:32px; text-align:right;}
+
+  .empty, .error, .loading{
+    color:var(--muted); font-size:14px; text-align:center; padding:60px 20px; line-height:1.6;
+  }
+  .error{color:var(--live);}
+
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#F7F8FB; --panel:#FFFFFF; --panel2:#EEF1F8; --line:#E2E6F0;
+      --text:#141B2E; --muted:#6B7690; --amber:#B8790F; --live:#D3372B; --win:#1B9E63;
+    }
+    body{background:var(--bg);}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="title-row">
+      <h1>SCOREBOARD</h1>
+      <div class="clock" id="clock"></div>
+    </div>
+    <nav id="tabs">
+      <button data-sport="nba" class="active">NBA</button>
+      <button data-sport="nfl">NFL</button>
+      <button data-sport="soccer">Soccer · EPL</button>
+      <button data-sport="cricket">Cricket</button>
+    </nav>
+  </header>
+  <main>
+    <div class="toolbar">
+      <span class="day-label" id="dayLabel">Today</span>
+      <button class="refresh" id="refreshBtn">Refresh</button>
+    </div>
+    <div id="games"><div class="loading">Loading scores…</div></div>
+  </main>
+</div>
+
+<script>
+const ENDPOINTS = {
+  nba:    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+  nfl:    "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+  soccer: "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
+};
+const CRICKET_HEADER = "https://site.web.api.espn.com/apis/personalized/v2/scoreboard/header?sport=cricket&region=in&tz=Asia/Calcutta";
+
+let currentSport = "nba";
+let timer = null;
+
+function setClock(){
+  const el = document.getElementById('clock');
+  el.textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+setClock();
+setInterval(setClock, 30000);
+
+document.getElementById('tabs').addEventListener('click', (e)=>{
+  const btn = e.target.closest('button');
+  if(!btn) return;
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  currentSport = btn.dataset.sport;
+  loadScores();
+});
+document.getElementById('refreshBtn').addEventListener('click', loadScores);
+
+function statusInfo(comp){
+  const st = comp.status?.type || {};
+  if(st.state === 'in') return {label: comp.status.type.shortDetail || 'LIVE', live:true};
+  if(st.state === 'post') return {label: 'FINAL', live:false};
+  const d = new Date(comp.date);
+  return {label: d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), live:false};
+}
+
+function renderCard(event){
+  const comp = event.competitions?.[0];
+  if(!comp) return '';
+  const competitors = comp.competitors || [];
+  const st = statusInfo(comp);
+  const league = event.league?.abbreviation || '';
+
+  const rows = competitors.map(c=>{
+    const name = c.team?.displayName || c.athlete?.displayName || 'TBD';
+    const logo = c.team?.logo;
+    const score = (c.score !== undefined && c.score !== null && c.score !== '') ? c.score : '-';
+    const isWinner = c.winner === true;
+    return `<div class="team-row">
+      <span class="team-name ${isWinner?'winner':''}">
+        ${logo ? `<img class="logo" src="${logo}" alt="" loading="lazy">` : ''}
+        ${name}
+      </span>
+      <span class="score">${score}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="card-top">
+      <span class="status ${st.live?'live':''}">${st.label}</span>
+      <span class="league">${league}</span>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+async function loadCricketEvents(){
+  const headerRes = await fetch(CRICKET_HEADER);
+  if(!headerRes.ok) throw new Error('bad header response');
+  const headerData = await headerRes.json();
+  const series = (headerData.sports?.[0]?.leagues || []).slice(0, 4);
+  if(series.length === 0) return [];
+
+  const boards = await Promise.all(series.map(async s=>{
+    try{
+      const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/cricket/${s.id}/scoreboard`);
+      if(!r.ok) return [];
+      const d = await r.json();
+      return (d.events || []).map(e=>{
+        if(!e.league) e.league = { abbreviation: s.abbreviation || s.shortName || 'CRICKET' };
+        return e;
+      });
+    }catch(_){ return []; }
+  }));
+  return boards.flat();
+}
+
+async function loadScores(){
+  const container = document.getElementById('games');
+  container.innerHTML = '<div class="loading">Loading scores…</div>';
+  try{
+    let events;
+    if(currentSport === 'cricket'){
+      events = await loadCricketEvents();
+      document.getElementById('dayLabel').textContent = 'Active series';
+    } else {
+      const res = await fetch(ENDPOINTS[currentSport]);
+      if(!res.ok) throw new Error('bad response');
+      const data = await res.json();
+      events = data.events || [];
+      document.getElementById('dayLabel').textContent = data.day?.date || 'Today';
+    }
+
+    if(events.length === 0){
+      container.innerHTML = '<div class="empty">No games scheduled right now.</div>';
+      return;
+    }
+    container.innerHTML = events.map(renderCard).join('');
+  }catch(err){
+    container.innerHTML = '<div class="error">Could not load scores. Check your connection and hit Refresh.</div>';
+  }
+  clearTimeout(timer);
+  timer = setTimeout(loadScores, 30000);
+}
+
+loadScores();
+</script>
+</body>
+</html>
